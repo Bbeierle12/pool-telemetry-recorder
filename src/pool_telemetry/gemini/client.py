@@ -5,10 +5,12 @@ import json
 import queue
 import time
 from dataclasses import dataclass
-from typing import Optional
 
 import websocket
 from PyQt6 import QtCore
+
+
+GEMINI_BASE_URL = "wss://generativelanguage.googleapis.com/v1beta/models"
 
 
 @dataclass
@@ -18,10 +20,12 @@ class GeminiConnection:
     system_prompt: str = ""
     reconnect_attempts: int = 3
     reconnect_delay_ms: int = 1000
-    endpoint: str = (
-        "wss://generativelanguage.googleapis.com/v1beta/models/"
-        "gemini-2.0-flash:streamGenerateContent"
-    )
+    base_url: str = GEMINI_BASE_URL
+
+    @property
+    def endpoint(self) -> str:
+        """Construct full endpoint URL using the configured model."""
+        return f"{self.base_url}/{self.model}:streamGenerateContent"
 
 
 class GeminiClient(QtCore.QThread):
@@ -29,15 +33,18 @@ class GeminiClient(QtCore.QThread):
     status = QtCore.pyqtSignal(str)
     error = QtCore.pyqtSignal(str)
 
+    # Maximum frames to buffer before dropping; prevents unbounded memory growth
+    MAX_QUEUE_SIZE = 60
+
     def __init__(
         self,
         connection: GeminiConnection,
-        parent: Optional[QtCore.QObject] = None,
+        parent: QtCore.QObject | None = None,
     ) -> None:
         super().__init__(parent)
         self._connection = connection
         self._running = True
-        self._queue: queue.Queue[dict] = queue.Queue()
+        self._queue: queue.Queue[dict] = queue.Queue(maxsize=self.MAX_QUEUE_SIZE)
 
     def stop(self) -> None:
         self._running = False
@@ -47,7 +54,11 @@ class GeminiClient(QtCore.QThread):
             "frame": base64.b64encode(frame_bytes).decode("ascii"),
             "timestamp_ms": int(timestamp_ms),
         }
-        self._queue.put(payload)
+        try:
+            self._queue.put_nowait(payload)
+        except queue.Full:
+            # Drop frame if queue is full to prevent memory growth and blocking
+            pass
 
     def run(self) -> None:
         headers = [f"x-goog-api-key: {self._connection.api_key}"]
@@ -63,7 +74,7 @@ class GeminiClient(QtCore.QThread):
             except Exception as exc:
                 attempts += 1
                 self.error.emit(f"Gemini connection failed: {exc}")
-                if max_attempts and attempts > max_attempts:
+                if max_attempts and attempts >= max_attempts:
                     self.error.emit("Gemini reconnect attempts exceeded")
                     return
                 time.sleep(base_delay * (2 ** (attempts - 1)))

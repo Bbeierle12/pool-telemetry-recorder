@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 from PyQt6 import QtWidgets
 
@@ -13,7 +12,7 @@ class ExportDialog(QtWidgets.QDialog):
         self,
         export_manager: ExportManager,
         session_id: str,
-        parent: Optional[QtWidgets.QWidget] = None,
+        parent: QtWidgets.QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._export_manager = export_manager
@@ -74,12 +73,20 @@ class ExportDialog(QtWidgets.QDialog):
             return
         destination = Path(destination_text)
         format_label = self._format.currentText()
-        if format_label.startswith("Claude"):
-            self._export_manager.export_claude_json(self._session_id, destination)
-        elif format_label.startswith("Full"):
-            self._export_manager.export_full_json(self._session_id, destination)
-        elif format_label.startswith("Shot"):
-            self._export_manager.export_shots_csv(self._session_id, destination)
-        else:
-            self._export_manager.export_events_jsonl(self._session_id, destination)
-        self.accept()
+        try:
+            if format_label.startswith("Claude"):
+                self._export_manager.export_claude_json(self._session_id, destination)
+            elif format_label.startswith("Full"):
+                self._export_manager.export_full_json(self._session_id, destination)
+            elif format_label.startswith("Shot"):
+                self._export_manager.export_shots_csv(self._session_id, destination)
+            else:
+                self._export_manager.export_events_jsonl(self._session_id, destination)
+            QtWidgets.QMessageBox.information(
+                self, "Export", f"Successfully exported to:\n{destination}"
+            )
+            self.accept()
+        except OSError as exc:
+            QtWidgets.QMessageBox.critical(
+                self, "Export Failed", f"Failed to write export file:\n{exc}"
+            )

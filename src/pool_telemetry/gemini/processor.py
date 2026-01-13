@@ -4,7 +4,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any
 
 from PyQt6 import QtCore
 
@@ -13,7 +13,7 @@ from PyQt6 import QtCore
 class EventRecord:
     timestamp_ms: int
     event_type: str
-    event_data: Dict[str, Any]
+    event_data: dict[str, Any]
     received_at: str
 
 
@@ -23,15 +23,17 @@ class EventProcessor(QtCore.QObject):
 
     def __init__(
         self,
-        db_path: Optional[str] = None,
-        session_id: Optional[str] = None,
-        parent: Optional[QtCore.QObject] = None,
+        db_path: str | None = None,
+        session_id: str | None = None,
+        parent: QtCore.QObject | None = None,
     ) -> None:
         super().__init__(parent)
         self._session_id = session_id
-        self._conn: Optional[sqlite3.Connection] = None
+        self._conn: sqlite3.Connection | None = None
         if db_path:
-            self._conn = sqlite3.connect(db_path)
+            # check_same_thread=False allows connection to be used from signal handlers
+            # that may be invoked from different threads (e.g., GeminiClient thread)
+            self._conn = sqlite3.connect(db_path, check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
 
     def close(self) -> None:
@@ -39,10 +41,10 @@ class EventProcessor(QtCore.QObject):
             self._conn.close()
             self._conn = None
 
-    def set_session(self, session_id: Optional[str]) -> None:
+    def set_session(self, session_id: str | None) -> None:
         self._session_id = session_id
 
-    def process_raw(self, raw_message: str) -> Optional[EventRecord]:
+    def process_raw(self, raw_message: str) -> EventRecord | None:
         try:
             payload = json.loads(raw_message)
         except json.JSONDecodeError as exc:
@@ -50,7 +52,7 @@ class EventProcessor(QtCore.QObject):
             return None
         return self.process_event(payload)
 
-    def process_event(self, payload: Dict[str, Any]) -> Optional[EventRecord]:
+    def process_event(self, payload: dict[str, Any]) -> EventRecord | None:
         event_type = payload.get("event_type") or payload.get("type") or "UNKNOWN"
         timestamp = payload.get("timestamp_ms") or payload.get("timestamp") or 0
         record = EventRecord(

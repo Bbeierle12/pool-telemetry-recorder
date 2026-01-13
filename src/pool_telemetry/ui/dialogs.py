@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from typing import Optional, Tuple
 
 from PyQt6 import QtWidgets
 
 
 class GoProConnectDialog(QtWidgets.QDialog):
-    def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Connect GoPro")
         self.setModal(True)
@@ -37,7 +36,7 @@ class GoProConnectDialog(QtWidgets.QDialog):
         layout.addLayout(form)
         layout.addWidget(buttons)
 
-    def values(self) -> Tuple[int, str, float]:
+    def values(self) -> tuple[int, str, float]:
         return (
             int(self._device_index.value()),
             self._resolution.currentText(),

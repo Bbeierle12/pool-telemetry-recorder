@@ -4,7 +4,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .db import connect
 
@@ -20,15 +20,32 @@ class SessionInfo:
 
 
 class SessionManager:
+    """Manages recording session lifecycle (create, update, delete)."""
+
     def __init__(self, db_path: Path) -> None:
+        """Initialize SessionManager with database path.
+
+        Args:
+            db_path: Path to the SQLite database file.
+        """
         self._db_path = db_path
 
     def start_session(
         self,
-        name: Optional[str],
+        name: str | None,
         source_type: str,
         source_path: str,
     ) -> SessionInfo:
+        """Create and start a new recording session.
+
+        Args:
+            name: Optional session name. Auto-generated if None.
+            source_type: Type of video source (e.g., "gopro_live", "video_file").
+            source_path: Path or identifier for the video source.
+
+        Returns:
+            SessionInfo with the new session's details.
+        """
         session_id = uuid.uuid4().hex
         created_at = datetime.now(timezone.utc).isoformat()
         session_name = name or f"Session {created_at}"
@@ -65,8 +82,18 @@ class SessionManager:
         total_pocketed: int,
         total_fouls: int,
         cost_usd: float,
-        notes: Optional[str] = None,
+        notes: str | None = None,
     ) -> None:
+        """Mark a session as completed and record final statistics.
+
+        Args:
+            session_id: ID of the session to end.
+            total_shots: Total number of shots in the session.
+            total_pocketed: Total balls pocketed.
+            total_fouls: Total fouls committed.
+            cost_usd: Total Gemini API cost in USD.
+            notes: Optional session notes.
+        """
         ended_at = datetime.now(timezone.utc).isoformat()
         with connect(self._db_path) as conn:
             conn.execute(
@@ -89,7 +116,12 @@ class SessionManager:
             )
             conn.commit()
 
-    def list_sessions(self) -> List[Dict[str, Any]]:
+    def list_sessions(self) -> list[dict[str, Any]]:
+        """Retrieve all sessions ordered by creation date (newest first).
+
+        Returns:
+            List of session dictionaries with id, name, stats, and status.
+        """
         with connect(self._db_path) as conn:
             cursor = conn.execute(
                 """
@@ -102,6 +134,13 @@ class SessionManager:
             return [dict(row) for row in cursor.fetchall()]
 
     def delete_session(self, session_id: str) -> None:
+        """Delete a session and all its associated data.
+
+        Cascades deletion to events, shots, fouls, games, and key_frames tables.
+
+        Args:
+            session_id: ID of the session to delete.
+        """
         with connect(self._db_path) as conn:
             conn.execute("DELETE FROM key_frames WHERE session_id = ?", (session_id,))
             conn.execute("DELETE FROM fouls WHERE session_id = ?", (session_id,))

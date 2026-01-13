@@ -2,8 +2,39 @@ __pycache__/
 *.pyc
 *.pyo
 .venv/
+venv/
 .env
 *.sqlite
 *.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
 *.log
+
+# Application data directory
 .pool_telemetry/
+
+# IDE/Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Claude Code temp files
+tmpclaude-*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# Key frames and exports
+key_frames/
+exports/

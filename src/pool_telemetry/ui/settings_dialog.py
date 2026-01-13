@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
 
 from PyQt6 import QtWidgets
 
@@ -8,7 +7,7 @@ from ..config import AppConfig, save_config
 
 
 class SettingsDialog(QtWidgets.QDialog):
-    def __init__(self, config: AppConfig, parent: Optional[QtWidgets.QWidget] = None) -> None:
+    def __init__(self, config: AppConfig, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._config = config
         self.setWindowTitle("Settings")

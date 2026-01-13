@@ -58,6 +58,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._last_frame_time = 0.0
         self._max_preview_fps = 30.0
         self._last_gemini_send = 0.0
+        self._paused = False
+        self._pause_button: QtWidgets.QPushButton | None = None
         self._source_status_label = QtWidgets.QLabel("Source: Disconnected")
         self._gemini_status_label = QtWidgets.QLabel("Gemini: Disconnected")
         self.setWindowTitle("Pool Telemetry Recorder")
@@ -74,24 +76,109 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _build_menu(self) -> None:
         menu_bar = self.menuBar()
-        file_menu = menu_bar.addMenu("File")
-        session_menu = menu_bar.addMenu("Session")
-        menu_bar.addMenu("View")
-        menu_bar.addMenu("Analysis")
-        settings_menu = menu_bar.addMenu("Settings")
-        menu_bar.addMenu("Help")
 
-        export_action = QtGui.QAction("Export", self)
+        # File menu
+        file_menu = menu_bar.addMenu("File")
+        new_session_action = QtGui.QAction("New Session", self)
+        new_session_action.setShortcut("Ctrl+N")
+        new_session_action.triggered.connect(self._on_new_session)
+        file_menu.addAction(new_session_action)
+
+        export_action = QtGui.QAction("Export...", self)
+        export_action.setShortcut("Ctrl+E")
         export_action.triggered.connect(self._on_export)
         file_menu.addAction(export_action)
 
-        browser_action = QtGui.QAction("Session Browser", self)
+        file_menu.addSeparator()
+
+        exit_action = QtGui.QAction("Exit", self)
+        exit_action.setShortcut("Ctrl+Q")
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
+
+        # Session menu
+        session_menu = menu_bar.addMenu("Session")
+        browser_action = QtGui.QAction("Session Browser...", self)
+        browser_action.setShortcut("Ctrl+B")
         browser_action.triggered.connect(self._open_session_browser)
         session_menu.addAction(browser_action)
 
-        settings_action = QtGui.QAction("Preferences", self)
+        session_menu.addSeparator()
+
+        start_action = QtGui.QAction("Start Recording", self)
+        start_action.setShortcut("F5")
+        start_action.triggered.connect(self._on_session_start)
+        session_menu.addAction(start_action)
+
+        pause_action = QtGui.QAction("Pause/Resume", self)
+        pause_action.setShortcut("F6")
+        pause_action.triggered.connect(self._on_session_pause)
+        session_menu.addAction(pause_action)
+
+        stop_action = QtGui.QAction("Stop Recording", self)
+        stop_action.setShortcut("F7")
+        stop_action.triggered.connect(self._on_session_stop)
+        session_menu.addAction(stop_action)
+
+        # View menu
+        view_menu = menu_bar.addMenu("View")
+        self._show_raw_json_action = QtGui.QAction("Show Raw JSON", self)
+        self._show_raw_json_action.setCheckable(True)
+        self._show_raw_json_action.setChecked(self._config.ui.show_raw_json)
+        self._show_raw_json_action.triggered.connect(self._toggle_raw_json)
+        view_menu.addAction(self._show_raw_json_action)
+
+        self._show_trajectory_action = QtGui.QAction("Show Trajectory Overlay", self)
+        self._show_trajectory_action.setCheckable(True)
+        self._show_trajectory_action.setChecked(self._config.ui.show_trajectory_overlay)
+        self._show_trajectory_action.triggered.connect(self._toggle_trajectory_overlay)
+        view_menu.addAction(self._show_trajectory_action)
+
+        view_menu.addSeparator()
+
+        clear_log_action = QtGui.QAction("Clear Event Log", self)
+        clear_log_action.triggered.connect(self._clear_event_log)
+        view_menu.addAction(clear_log_action)
+
+        # Analysis menu
+        analysis_menu = menu_bar.addMenu("Analysis")
+        analyze_session_action = QtGui.QAction("Analyze Current Session...", self)
+        analyze_session_action.triggered.connect(self._on_analyze)
+        analysis_menu.addAction(analyze_session_action)
+
+        analysis_menu.addSeparator()
+
+        shot_breakdown_action = QtGui.QAction("Shot Breakdown", self)
+        shot_breakdown_action.triggered.connect(self._show_shot_breakdown)
+        analysis_menu.addAction(shot_breakdown_action)
+
+        accuracy_stats_action = QtGui.QAction("Accuracy Statistics", self)
+        accuracy_stats_action.triggered.connect(self._show_accuracy_stats)
+        analysis_menu.addAction(accuracy_stats_action)
+
+        # Settings menu
+        settings_menu = menu_bar.addMenu("Settings")
+        settings_action = QtGui.QAction("Preferences...", self)
+        settings_action.setShortcut("Ctrl+,")
         settings_action.triggered.connect(self._open_settings)
         settings_menu.addAction(settings_action)
+
+        # Help menu
+        help_menu = menu_bar.addMenu("Help")
+        about_action = QtGui.QAction("About Pool Telemetry Recorder", self)
+        about_action.triggered.connect(self._show_about)
+        help_menu.addAction(about_action)
+
+        help_menu.addSeparator()
+
+        docs_action = QtGui.QAction("Documentation", self)
+        docs_action.setShortcut("F1")
+        docs_action.triggered.connect(self._show_documentation)
+        help_menu.addAction(docs_action)
+
+        shortcuts_action = QtGui.QAction("Keyboard Shortcuts", self)
+        shortcuts_action.triggered.connect(self._show_shortcuts)
+        help_menu.addAction(shortcuts_action)
 
     def _build_layout(self) -> None:
         central = QtWidgets.QWidget()
@@ -124,15 +211,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._stop_gemini_client()
         self._event_processor.close()
         super().closeEvent(event)
-
-    def _panel(self, title: str) -> QtWidgets.QGroupBox:
-        group = QtWidgets.QGroupBox(title)
-        group.setMinimumHeight(140)
-        label = QtWidgets.QLabel("Placeholder")
-        label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        layout = QtWidgets.QVBoxLayout(group)
-        layout.addWidget(label)
-        return group
 
     def _event_panel(self) -> QtWidgets.QGroupBox:
         group = QtWidgets.QGroupBox("Event Stream")
@@ -234,15 +312,17 @@ class MainWindow(QtWidgets.QMainWindow):
         group = QtWidgets.QGroupBox("Controls")
         layout = QtWidgets.QHBoxLayout(group)
         start_button = QtWidgets.QPushButton("Start")
-        pause_button = QtWidgets.QPushButton("Pause")
+        self._pause_button = QtWidgets.QPushButton("Pause")
         stop_button = QtWidgets.QPushButton("Stop")
         export_button = QtWidgets.QPushButton("Export")
         analyze_button = QtWidgets.QPushButton("Analyze")
         start_button.clicked.connect(self._on_session_start)
-        pause_button.clicked.connect(self._on_session_pause)
+        self._pause_button.clicked.connect(self._on_session_pause)
         stop_button.clicked.connect(self._on_session_stop)
+        export_button.clicked.connect(self._on_export)
+        analyze_button.clicked.connect(self._on_analyze)
         layout.addWidget(start_button)
-        layout.addWidget(pause_button)
+        layout.addWidget(self._pause_button)
         layout.addWidget(stop_button)
         layout.addStretch(1)
         layout.addWidget(export_button)
@@ -297,9 +377,14 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self._video_worker.frame_ready.connect(self._on_frame_ready)
         self._video_worker.status.connect(self.statusBar().showMessage)
+        self._video_worker.error.connect(self._on_video_error)
         self._video_worker.ended.connect(self._on_video_ended)
         self._video_worker.start()
         self._set_source_status("Connected")
+
+    def _on_video_error(self, message: str) -> None:
+        self.statusBar().showMessage(f"Video error: {message}")
+        self._set_source_status("Error")
 
     def _stop_video_worker(self) -> None:
         if not self._video_worker:
@@ -328,13 +413,15 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         height, width, channels = frame.shape
         bytes_per_line = channels * width
+        # QImage wraps the buffer without copying, so we must copy() to ensure
+        # the data remains valid after the original frame array is released/modified
         image = QtGui.QImage(
             frame.data,
             width,
             height,
             bytes_per_line,
             QtGui.QImage.Format.Format_BGR888,
-        )
+        ).copy()
         pixmap = QtGui.QPixmap.fromImage(image)
         scaled = pixmap.scaled(
             self._video_label.size(),
@@ -394,10 +481,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._cost_label.setText(f"Cost: ${self._cost_total:.2f}")
             warn_threshold = self._config.cost_tracking.warn_threshold_usd
             stop_threshold = self._config.cost_tracking.stop_threshold_usd
-            if warn_threshold and self._cost_total >= warn_threshold:
-                self.statusBar().showMessage("Cost warning threshold reached")
             if stop_threshold and self._cost_total >= stop_threshold:
-                self.statusBar().showMessage("Cost stop threshold reached")
+                self.statusBar().showMessage("Cost stop threshold reached - stopping session")
+                self._on_session_stop()
+            elif warn_threshold and self._cost_total >= warn_threshold:
+                self.statusBar().showMessage("Cost warning threshold reached")
 
     def _increment_shot(self, shot_number: int | None) -> None:
         if shot_number is not None:
@@ -491,7 +579,17 @@ class MainWindow(QtWidgets.QMainWindow):
         return None
 
     def _on_session_pause(self) -> None:
-        self.statusBar().showMessage("Paused")
+        if not self._session_id:
+            return
+        self._paused = not self._paused
+        if self._paused:
+            self.statusBar().showMessage("Paused - Gemini analysis suspended")
+            if self._pause_button:
+                self._pause_button.setText("Resume")
+        else:
+            self.statusBar().showMessage("Recording")
+            if self._pause_button:
+                self._pause_button.setText("Pause")
 
     def _on_session_stop(self) -> None:
         self.statusBar().showMessage("Stopped")
@@ -506,6 +604,7 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             self._event_processor.set_session(None)
             self._session_id = None
+            self._reset_session_counters()
         self._stop_gemini_client()
 
     def _update_runtime(self) -> None:
@@ -581,6 +680,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._foul_count = 0
         self._cost_total = 0.0
         self._counted_shots.clear()
+        self._session_start = None
+        self._paused = False
         if self._shots_label:
             self._shots_label.setText("Shots: 0")
         if self._pocketed_label:
@@ -589,6 +690,10 @@ class MainWindow(QtWidgets.QMainWindow):
             self._fouls_label.setText("Fouls: 0")
         if self._cost_label:
             self._cost_label.setText("Cost: $0.00")
+        if self._runtime_label:
+            self._runtime_label.setText("Runtime: 00:00:00")
+        if self._pause_button:
+            self._pause_button.setText("Pause")
 
     def _open_settings(self) -> None:
         dialog = SettingsDialog(self._config, self)
@@ -612,6 +717,22 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         dialog = ExportDialog(self._export_manager, session_id, self)
         dialog.exec()
+
+    def _on_analyze(self) -> None:
+        session_id = self._session_id or self._last_session_id
+        if not session_id:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Analyze",
+                "Start or select a session before analyzing.",
+            )
+            return
+        # Placeholder for future analysis functionality
+        QtWidgets.QMessageBox.information(
+            self,
+            "Analyze",
+            "Analysis feature coming soon. Session data has been recorded and can be exported for external analysis.",
+        )
 
     def _start_gemini_client(self) -> None:
         api_key = self._config.api_keys.gemini
@@ -643,7 +764,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_gemini_status("Disconnected")
 
     def _send_frame_to_gemini(self, frame, timestamp_ms: float) -> None:
-        if not self._gemini_client:
+        if not self._gemini_client or self._paused:
             return
         now = time.monotonic()
         sample_interval = self._config.gemini.frame_sample_rate_ms / 1000.0
@@ -651,7 +772,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self._last_gemini_send = now
         quality = int(self._config.storage.frame_quality)
-        ok, buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+        ok, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
         if not ok:
             return
         self._gemini_client.enqueue_frame(buffer.tobytes(), timestamp_ms)
@@ -670,3 +791,129 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._session_start is None:
             self._session_start = time.time()
         self.statusBar().showMessage("Recording")
+
+    # --- New Session ---
+    def _on_new_session(self) -> None:
+        if self._session_id:
+            reply = QtWidgets.QMessageBox.question(
+                self,
+                "New Session",
+                "A session is currently active. Stop it and start a new one?",
+                QtWidgets.QMessageBox.StandardButton.Yes
+                | QtWidgets.QMessageBox.StandardButton.No,
+            )
+            if reply != QtWidgets.QMessageBox.StandardButton.Yes:
+                return
+            self._on_session_stop()
+        self._reset_session_counters()
+        self.statusBar().showMessage("Ready for new session")
+
+    # --- View menu handlers ---
+    def _toggle_raw_json(self, checked: bool) -> None:
+        self._config.ui.show_raw_json = checked
+        self.statusBar().showMessage(f"Raw JSON display {'enabled' if checked else 'disabled'}")
+
+    def _toggle_trajectory_overlay(self, checked: bool) -> None:
+        self._config.ui.show_trajectory_overlay = checked
+        self.statusBar().showMessage(f"Trajectory overlay {'enabled' if checked else 'disabled'}")
+
+    def _clear_event_log(self) -> None:
+        if self._event_log:
+            self._event_log.clear()
+            self.statusBar().showMessage("Event log cleared")
+
+    # --- Analysis menu handlers ---
+    def _show_shot_breakdown(self) -> None:
+        session_id = self._session_id or self._last_session_id
+        if not session_id:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Shot Breakdown",
+                "No session available. Start or select a session first.",
+            )
+            return
+        QtWidgets.QMessageBox.information(
+            self,
+            "Shot Breakdown",
+            f"Shot breakdown analysis for session.\n\n"
+            f"Total shots: {self._shot_count}\n"
+            f"Balls pocketed: {self._pocketed_count}\n"
+            f"Fouls: {self._foul_count}\n\n"
+            f"(Detailed breakdown coming in future update)",
+        )
+
+    def _show_accuracy_stats(self) -> None:
+        session_id = self._session_id or self._last_session_id
+        if not session_id:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Accuracy Statistics",
+                "No session available. Start or select a session first.",
+            )
+            return
+        accuracy = 0.0
+        if self._shot_count > 0:
+            accuracy = (self._pocketed_count / self._shot_count) * 100
+        QtWidgets.QMessageBox.information(
+            self,
+            "Accuracy Statistics",
+            f"Session Accuracy Statistics\n\n"
+            f"Pocketing accuracy: {accuracy:.1f}%\n"
+            f"Shots taken: {self._shot_count}\n"
+            f"Successful pockets: {self._pocketed_count}\n\n"
+            f"(Advanced statistics coming in future update)",
+        )
+
+    # --- Help menu handlers ---
+    def _show_about(self) -> None:
+        QtWidgets.QMessageBox.about(
+            self,
+            "About Pool Telemetry Recorder",
+            "<h3>Pool Telemetry Recorder</h3>"
+            f"<p>Version {self._config.version}</p>"
+            "<p>A real-time pool/billiards telemetry analysis tool using "
+            "Google Gemini Live API for AI-powered shot detection and tracking.</p>"
+            "<p><b>Features:</b></p>"
+            "<ul>"
+            "<li>Live video capture from GoPro or video files</li>"
+            "<li>Real-time ball position tracking</li>"
+            "<li>Shot detection and analysis</li>"
+            "<li>Session recording and export</li>"
+            "</ul>"
+            "<p>Built with PyQt6, OpenCV, and Gemini Live API.</p>",
+        )
+
+    def _show_documentation(self) -> None:
+        QtWidgets.QMessageBox.information(
+            self,
+            "Documentation",
+            "<h3>Quick Start Guide</h3>"
+            "<p><b>1. Connect Video Source</b></p>"
+            "<p>Click 'Connect GoPro' for live capture or 'Import Video' for recorded footage.</p>"
+            "<p><b>2. Start Recording</b></p>"
+            "<p>Click 'Start' or press F5 to begin a session. The Gemini API will analyze frames.</p>"
+            "<p><b>3. Monitor Progress</b></p>"
+            "<p>Watch the Ball Matrix for positions and Event Stream for detected events.</p>"
+            "<p><b>4. Export Data</b></p>"
+            "<p>Use File → Export to save session data in JSON, CSV, or JSONL format.</p>"
+            "<p><b>API Key Required</b></p>"
+            "<p>Set your Gemini API key in Settings → Preferences.</p>",
+        )
+
+    def _show_shortcuts(self) -> None:
+        QtWidgets.QMessageBox.information(
+            self,
+            "Keyboard Shortcuts",
+            "<h3>Keyboard Shortcuts</h3>"
+            "<table>"
+            "<tr><td><b>Ctrl+N</b></td><td>New Session</td></tr>"
+            "<tr><td><b>Ctrl+E</b></td><td>Export</td></tr>"
+            "<tr><td><b>Ctrl+B</b></td><td>Session Browser</td></tr>"
+            "<tr><td><b>Ctrl+,</b></td><td>Preferences</td></tr>"
+            "<tr><td><b>Ctrl+Q</b></td><td>Exit</td></tr>"
+            "<tr><td><b>F1</b></td><td>Documentation</td></tr>"
+            "<tr><td><b>F5</b></td><td>Start Recording</td></tr>"
+            "<tr><td><b>F6</b></td><td>Pause/Resume</td></tr>"
+            "<tr><td><b>F7</b></td><td>Stop Recording</td></tr>"
+            "</table>",
+        )

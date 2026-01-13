@@ -1,3 +1,6 @@
 PyQt6>=6.6
 opencv-python>=4.8
 websocket-client>=1.6
+
+# Development dependencies
+pytest>=7.4

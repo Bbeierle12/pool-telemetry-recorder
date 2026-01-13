@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from pathlib import Path
 
 from PyQt6 import QtWidgets
 
-from .config import load_config, save_config
+from .config import AppConfig, load_config, save_config
 from .db import get_db_path, init_db
 from .exporter import ExportManager
 from .gemini.processor import EventProcessor
@@ -28,8 +29,24 @@ def _configure_logging(data_dir: str) -> None:
     )
 
 
+def _apply_env_overrides(config: AppConfig) -> None:
+    """Apply environment variable overrides to config (more secure than file storage)."""
+    gemini_key = os.environ.get("GEMINI_API_KEY")
+    if gemini_key:
+        config.api_keys.gemini = gemini_key
+
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+    if anthropic_key:
+        config.api_keys.anthropic = anthropic_key
+
+    data_dir = os.environ.get("POOL_TELEMETRY_DATA_DIR")
+    if data_dir:
+        config.storage.data_directory = data_dir
+
+
 def main() -> int:
     config = load_config()
+    _apply_env_overrides(config)
     save_config(config)
     _configure_logging(config.storage.data_directory)
     init_db(config).close()

@@ -9,10 +9,25 @@ from .db import connect
 
 
 class ExportManager:
+    """Exports session data in various formats (JSON, CSV, JSONL)."""
+
     def __init__(self, db_path: Path) -> None:
+        """Initialize ExportManager with database path.
+
+        Args:
+            db_path: Path to the SQLite database file.
+        """
         self._db_path = db_path
 
     def export_full_json(self, session_id: str, destination: Path) -> None:
+        """Export complete session data including all related tables.
+
+        Includes: session, shots, events, fouls, games, key_frames.
+
+        Args:
+            session_id: ID of the session to export.
+            destination: Output file path for the JSON export.
+        """
         payload = {
             "session": self._fetch_one(
                 "SELECT * FROM sessions WHERE id = ?",
@@ -42,6 +57,14 @@ class ExportManager:
         destination.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
     def export_claude_json(self, session_id: str, destination: Path) -> None:
+        """Export session data optimized for Claude analysis.
+
+        Includes only: session, shots, events (no fouls, games, key_frames).
+
+        Args:
+            session_id: ID of the session to export.
+            destination: Output file path for the JSON export.
+        """
         payload = {
             "session": self._fetch_one(
                 "SELECT * FROM sessions WHERE id = ?",
@@ -59,6 +82,12 @@ class ExportManager:
         destination.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
     def export_shots_csv(self, session_id: str, destination: Path) -> None:
+        """Export shots table as CSV for spreadsheet analysis.
+
+        Args:
+            session_id: ID of the session to export.
+            destination: Output file path for the CSV export.
+        """
         rows = self._fetch_all(
             "SELECT * FROM shots WHERE session_id = ? ORDER BY shot_number",
             (session_id,),
@@ -73,6 +102,14 @@ class ExportManager:
             writer.writerows(rows)
 
     def export_events_jsonl(self, session_id: str, destination: Path) -> None:
+        """Export events as JSONL (one JSON object per line).
+
+        Useful for streaming processing or log analysis tools.
+
+        Args:
+            session_id: ID of the session to export.
+            destination: Output file path for the JSONL export.
+        """
         rows = self._fetch_all(
             "SELECT * FROM events WHERE session_id = ? ORDER BY timestamp_ms",
             (session_id,),

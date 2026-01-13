@@ -2,7 +2,7 @@ Pool Telemetry Recorder - Agent Handoff
 
 Overview
 - Python + PyQt6 desktop app that records pool telemetry from video sources.
-- Current focus: scaffolded phases 1-6 with UI, config, SQLite schema, video capture, session management, exports, and Gemini Live wiring hooks.
+- Current focus: scaffolded phases 1-6 with UI, config, SQLite schema, video capture, session management, exports, and Gemini Live wiring.
 
 Project layout
 - src/pool_telemetry/app.py: entry point, config + DB init, logging setup.
@@ -15,8 +15,9 @@ Project layout
 - src/pool_telemetry/exporter.py: export JSON/CSV/JSONL helpers.
 
 Run locally
-1) Create venv and install deps: pip install -r requirements.txt
-2) Run from src: python -m pool_telemetry.app
+1) Create venv and install deps: `scripts\setup_venv.ps1`
+2) Activate: `.venv\Scripts\Activate.ps1`
+3) Run from src: `python -m pool_telemetry.app`
 
 Config and storage
 - Default data directory: %USERPROFILE%\.pool_telemetry
@@ -29,13 +30,13 @@ Gemini Live wiring
 - Frames are sampled by config.gemini.frame_sample_rate_ms and sent as JPEG.
 - Raw events are routed to EventProcessor, which persists to SQLite.
 - You must provide a Gemini API key in Settings.
-- NOTE: The actual Gemini Live message envelope may need adjustments once the exact API contract is verified.
+- System prompt is configurable via config.gemini.system_prompt.
+- Reconnect/backoff is enabled via config.gemini.reconnect_attempts and reconnect_delay_ms.
+- NOTE: The exact Gemini Live message envelope may still need adjustments.
 
 Known gaps / TODOs
-- No real Gemini prompt/system instruction yet; needs definition.
-- Video-to-Gemini error handling and reconnect logic is minimal.
-- Session browser is read-only; no open/delete actions yet.
-- Export dialog assumes current or last session only.
+- Session browser "Open" action only stores selected ID; no detailed viewer yet.
+- Export dialog assumes current or last session; no multi-select exports.
 - No tests yet; add unit tests for config/db/session/export when ready.
 
 Suggested next tasks

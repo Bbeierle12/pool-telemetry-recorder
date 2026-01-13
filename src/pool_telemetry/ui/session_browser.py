@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
 
 from PyQt6 import QtCore, QtWidgets
 
@@ -15,12 +14,12 @@ class SessionBrowserDialog(QtWidgets.QDialog):
         self,
         session_manager: SessionManager,
         export_manager: ExportManager,
-        parent: Optional[QtWidgets.QWidget] = None,
+        parent: QtWidgets.QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._session_manager = session_manager
         self._export_manager = export_manager
-        self._selected_session_id: Optional[str] = None
+        self._selected_session_id: str | None = None
         self.setWindowTitle("Session Browser")
         self.setModal(True)
 
@@ -59,7 +58,7 @@ class SessionBrowserDialog(QtWidgets.QDialog):
         self._set_action_state(False)
 
     @property
-    def selected_session_id(self) -> Optional[str]:
+    def selected_session_id(self) -> str | None:
         return self._selected_session_id
 
     def _refresh_table(self) -> None:

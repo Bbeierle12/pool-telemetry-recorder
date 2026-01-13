@@ -1,29 +1,36 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
+import stat
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 def default_data_dir() -> Path:
+    """Return the default data directory path (~/.pool_telemetry)."""
     return Path.home() / ".pool_telemetry"
 
 
 def default_config_path() -> Path:
+    """Return the default config file path (~/.pool_telemetry/config.json)."""
     return default_data_dir() / "config.json"
 
 
 @dataclass
 class ApiKeys:
-    gemini: Optional[str] = None
-    anthropic: Optional[str] = None
+    gemini: str | None = None
+    anthropic: str | None = None
 
 
 @dataclass
 class GoProConfig:
     connection_mode: str = "usb_webcam"
-    wifi_ip: Optional[str] = None
+    wifi_ip: str | None = None
     resolution: str = "1080p"
     framerate: int = 60
     stabilization: bool = True
@@ -32,7 +39,7 @@ class GoProConfig:
 @dataclass
 class VideoImportConfig:
     default_directory: str = "~/Videos"
-    supported_formats: List[str] = field(default_factory=lambda: ["mp4", "mov", "mkv", "avi"])
+    supported_formats: list[str] = field(default_factory=lambda: ["mp4", "mov", "mkv", "avi"])
     max_file_size_gb: int = 10
 
 
@@ -71,7 +78,7 @@ class UiConfig:
 class CostTrackingConfig:
     enabled: bool = True
     warn_threshold_usd: float = 5.0
-    stop_threshold_usd: Optional[float] = None
+    stop_threshold_usd: float | None = None
 
 
 @dataclass
@@ -85,11 +92,11 @@ class AppConfig:
     ui: UiConfig = field(default_factory=UiConfig)
     cost_tracking: CostTrackingConfig = field(default_factory=CostTrackingConfig)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
-def _deep_merge(base: Dict[str, Any], updates: Dict[str, Any]) -> Dict[str, Any]:
+def _deep_merge(base: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
     merged = dict(base)
     for key, value in updates.items():
         if isinstance(value, dict) and isinstance(merged.get(key), dict):
@@ -99,7 +106,7 @@ def _deep_merge(base: Dict[str, Any], updates: Dict[str, Any]) -> Dict[str, Any]
     return merged
 
 
-def _config_from_dict(data: Dict[str, Any]) -> AppConfig:
+def _config_from_dict(data: dict[str, Any]) -> AppConfig:
     defaults = AppConfig().to_dict()
     merged = _deep_merge(defaults, data)
     return AppConfig(
@@ -114,15 +121,64 @@ def _config_from_dict(data: Dict[str, Any]) -> AppConfig:
     )
 
 
-def load_config(path: Optional[Path] = None) -> AppConfig:
+def _check_config_security(config_path: Path, config: AppConfig) -> None:
+    """Check and warn about config file security issues."""
+    has_api_keys = config.api_keys.gemini or config.api_keys.anthropic
+
+    if not has_api_keys:
+        return
+
+    # Warn about plain-text API key storage
+    logger.warning(
+        "API keys are stored in plain text at %s. "
+        "Consider using environment variables (GEMINI_API_KEY, ANTHROPIC_API_KEY) "
+        "for production use.",
+        config_path,
+    )
+
+    # On Unix systems, check file permissions
+    if os.name != "nt":
+        try:
+            mode = config_path.stat().st_mode
+            if mode & (stat.S_IRWXG | stat.S_IRWXO):
+                logger.warning(
+                    "Config file %s has group/world permissions. "
+                    "Consider restricting with: chmod 600 %s",
+                    config_path,
+                    config_path,
+                )
+        except OSError:
+            pass
+
+
+def load_config(path: Path | None = None) -> AppConfig:
+    """Load application configuration from JSON file.
+
+    Args:
+        path: Optional path to config file. Defaults to ~/.pool_telemetry/config.json.
+
+    Returns:
+        AppConfig instance with loaded or default values.
+    """
     config_path = path or default_config_path()
     if not config_path.exists():
         return AppConfig()
     raw = json.loads(config_path.read_text(encoding="utf-8"))
-    return _config_from_dict(raw)
+    config = _config_from_dict(raw)
+    _check_config_security(config_path, config)
+    return config
 
 
-def save_config(config: AppConfig, path: Optional[Path] = None) -> Path:
+def save_config(config: AppConfig, path: Path | None = None) -> Path:
+    """Save application configuration to JSON file.
+
+    Args:
+        config: AppConfig instance to save.
+        path: Optional path for config file. Defaults to ~/.pool_telemetry/config.json.
+
+    Returns:
+        Path to the saved config file.
+    """
     config_path = path or default_config_path()
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(json.dumps(config.to_dict(), indent=2), encoding="utf-8")

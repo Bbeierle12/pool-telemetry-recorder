@@ -1,24 +1,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Tuple, Union
 
 import cv2
 
 
-Resolution = Tuple[int, int]
+Resolution = tuple[int, int]
 
 
 @dataclass
 class VideoSettings:
-    resolution: Optional[Resolution] = None
-    framerate: Optional[float] = None
+    resolution: Resolution | None = None
+    framerate: float | None = None
 
 
-VideoSource = Union[int, str]
+VideoSource = int | str
 
 
-def open_capture(source: VideoSource, settings: Optional[VideoSettings] = None) -> cv2.VideoCapture:
+def open_capture(source: VideoSource, settings: VideoSettings | None = None) -> cv2.VideoCapture:
     cap = cv2.VideoCapture(source)
     if settings and isinstance(source, int):
         if settings.resolution:
@@ -30,7 +29,7 @@ def open_capture(source: VideoSource, settings: Optional[VideoSettings] = None) 
     return cap
 
 
-def parse_resolution(value: str) -> Optional[Resolution]:
+def parse_resolution(value: str) -> Resolution | None:
     lookup = {
         "1080p": (1920, 1080),
         "720p": (1280, 720),
@@ -38,8 +37,10 @@ def parse_resolution(value: str) -> Optional[Resolution]:
     }
     if value in lookup:
         return lookup[value]
-    if "x" in value:
-        parts = value.lower().split("x")
+    # Handle custom WxH format (case-insensitive)
+    lower_value = value.lower()
+    if "x" in lower_value:
+        parts = lower_value.split("x")
         if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
             return int(parts[0]), int(parts[1])
     return None
