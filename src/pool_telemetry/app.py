@@ -12,6 +12,7 @@ from .db import get_db_path, init_db
 from .exporter import ExportManager
 from .gemini.processor import EventProcessor
 from .sessions import SessionManager
+from .storage import StorageManager
 from .ui.main_window import MainWindow
 
 
@@ -54,11 +55,44 @@ def main() -> int:
     event_processor = EventProcessor(str(db_path))
     session_manager = SessionManager(db_path)
     export_manager = ExportManager(db_path)
+    storage_manager = StorageManager(config.storage)
+
+    # Run startup cleanup
+    _run_startup_cleanup(storage_manager, session_manager)
 
     app = QtWidgets.QApplication(sys.argv)
-    window = MainWindow(config, event_processor, session_manager, export_manager)
+    window = MainWindow(
+        config, event_processor, session_manager, export_manager, storage_manager
+    )
     window.show()
     return app.exec()
+
+
+def _run_startup_cleanup(storage: StorageManager, sessions: SessionManager) -> None:
+    """Run storage cleanup on startup."""
+    logger = logging.getLogger(__name__)
+
+    # Get all session IDs from database
+    db_sessions = sessions.list_sessions()
+    db_session_ids = {s["id"] for s in db_sessions}
+
+    # Clean up orphaned storage (storage without database entry)
+    orphaned = storage.cleanup_orphaned_storage(db_session_ids)
+    if orphaned:
+        logger.info("Cleaned up %d orphaned session storage directories", orphaned)
+
+    # Clean up old sessions based on auto_cleanup_days
+    old = storage.cleanup_old_sessions(db_session_ids)
+    if old:
+        logger.info("Cleaned up %d old sessions", old)
+
+    # Check storage quota
+    within_quota, usage_gb = storage.check_storage_quota()
+    if not within_quota:
+        logger.warning(
+            "Storage usage (%.2f GB) exceeds quota. Consider cleaning up old sessions.",
+            usage_gb,
+        )
 
 
 if __name__ == "__main__":

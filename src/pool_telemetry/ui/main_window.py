@@ -11,6 +11,7 @@ from ..exporter import ExportManager
 from ..gemini.client import GeminiClient, GeminiConnection
 from ..gemini.processor import EventProcessor, EventRecord
 from ..sessions import SessionManager
+from ..storage import StorageManager
 from ..video.sources import VideoSettings, parse_resolution
 from ..video.worker import VideoWorker
 from .dialogs import GoProConnectDialog
@@ -26,12 +27,14 @@ class MainWindow(QtWidgets.QMainWindow):
         event_processor: EventProcessor,
         session_manager: SessionManager,
         export_manager: ExportManager,
+        storage_manager: StorageManager,
     ) -> None:
         super().__init__()
         self._config = config
         self._event_processor = event_processor
         self._session_manager = session_manager
         self._export_manager = export_manager
+        self._storage_manager = storage_manager
         self._video_worker: VideoWorker | None = None
         self._gemini_client: GeminiClient | None = None
         self._last_frame = None
@@ -458,12 +461,19 @@ class MainWindow(QtWidgets.QMainWindow):
             except (TypeError, ValueError):
                 shot_number = None
 
+        # Track shot events and save key frames
         if event_type in {"SHOT_START", "SHOT_BEGIN"}:
             self._increment_shot(shot_number)
+            self._save_shot_frame("pre_shot", shot_number, record.timestamp_ms)
         elif event_type == "SHOT":
             phase = str(payload.get("phase", "")).upper()
             if phase in {"START", "BEGIN"}:
                 self._increment_shot(shot_number)
+                self._save_shot_frame("pre_shot", shot_number, record.timestamp_ms)
+            elif phase in {"END", "COMPLETE"}:
+                self._save_shot_frame("post_shot", shot_number, record.timestamp_ms)
+        elif event_type in {"SHOT_END", "SHOT_COMPLETE"}:
+            self._save_shot_frame("post_shot", shot_number, record.timestamp_ms)
 
         if event_type in {"POCKET", "POCKETED"}:
             self._pocketed_count += 1
@@ -505,6 +515,22 @@ class MainWindow(QtWidgets.QMainWindow):
         self._shot_count += 1
         if self._shots_label:
             self._shots_label.setText(f"Shots: {self._shot_count}")
+
+    def _save_shot_frame(
+        self, frame_type: str, shot_number: int | None, timestamp_ms: int
+    ) -> None:
+        """Save a key frame for a shot event."""
+        if self._session_id is None or self._last_frame is None:
+            return
+        if not self._config.storage.save_key_frames:
+            return
+        self._storage_manager.save_frame(
+            self._session_id,
+            self._last_frame,
+            frame_type,
+            shot_number=shot_number or self._shot_count,
+            timestamp_ms=timestamp_ms,
+        )
 
     def _extract_ball_updates(self, payload: dict) -> list[dict]:
         candidates = []
@@ -605,6 +631,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.statusBar().showMessage("Stopped")
         if self._session_id:
             self._last_session_id = self._session_id
+
+            # Update storage metadata with final stats
+            self._storage_manager.update_session_metadata(
+                self._session_id,
+                {
+                    "ended_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "total_shots": self._shot_count,
+                    "total_pocketed": self._pocketed_count,
+                    "total_fouls": self._foul_count,
+                    "cost_usd": self._cost_total,
+                },
+            )
+
             self._session_manager.end_session(
                 self._session_id,
                 self._shot_count,
@@ -797,6 +836,29 @@ class MainWindow(QtWidgets.QMainWindow):
             self._session_id = session.session_id
             self._event_processor.set_session(self._session_id)
             self._reset_session_counters()
+
+            # Create session storage directory
+            self._storage_manager.create_session_storage(
+                self._session_id,
+                metadata={
+                    "source_type": self._current_source_type,
+                    "source_path": self._current_source_path,
+                    "name": session.name,
+                },
+            )
+
+            # Link source video if it's a file
+            if self._current_source_type == "video_file":
+                self._storage_manager.link_source_video(
+                    self._session_id, self._current_source_path
+                )
+
+            # Save first frame as session thumbnail
+            if self._last_frame is not None:
+                self._storage_manager.save_thumbnail(
+                    self._session_id, self._last_frame, "session_thumb"
+                )
+
         self._start_gemini_client()
         if self._session_start is None:
             self._session_start = time.time()
