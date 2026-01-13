@@ -12,7 +12,7 @@ from .config import AppConfig
 logger = logging.getLogger(__name__)
 
 # Current schema version - increment when schema changes
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA_STATEMENTS = [
     """
@@ -143,6 +143,99 @@ SCHEMA_STATEMENTS = [
     """
     CREATE INDEX IF NOT EXISTS idx_key_frames_session_id ON key_frames(session_id)
     """,
+    # New tables for local CV pipeline (schema version 2)
+    """
+    CREATE TABLE IF NOT EXISTS trajectories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT REFERENCES sessions(id),
+        shot_id INTEGER REFERENCES shots(id),
+        ball_name TEXT,
+        track_id INTEGER,
+        points TEXT,
+        start_timestamp_ms INTEGER,
+        end_timestamp_ms INTEGER,
+        total_distance REAL,
+        max_speed REAL,
+        created_at DATETIME
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ball_collisions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT REFERENCES sessions(id),
+        shot_id INTEGER REFERENCES shots(id),
+        timestamp_ms INTEGER,
+        frame_number INTEGER,
+        ball1_name TEXT,
+        ball2_name TEXT,
+        ball1_track_id INTEGER,
+        ball2_track_id INTEGER,
+        position_x REAL,
+        position_y REAL,
+        ball1_vx_before REAL,
+        ball1_vy_before REAL,
+        ball1_vx_after REAL,
+        ball1_vy_after REAL,
+        ball2_vx_before REAL,
+        ball2_vy_before REAL,
+        ball2_vx_after REAL,
+        ball2_vy_after REAL,
+        deflection_angle REAL,
+        energy_transferred REAL,
+        created_at DATETIME
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS physics_analysis (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT REFERENCES sessions(id),
+        shot_id INTEGER REFERENCES shots(id),
+        cue_initial_speed REAL,
+        cue_initial_speed_mph REAL,
+        cue_initial_angle REAL,
+        cue_distance_traveled REAL,
+        cue_final_x REAL,
+        cue_final_y REAL,
+        total_collisions INTEGER,
+        energy_efficiency REAL,
+        physics_valid BOOLEAN,
+        validation_errors TEXT,
+        simulation_match_score REAL,
+        position_errors TEXT,
+        analysis_json TEXT,
+        created_at DATETIME
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS calibrations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT REFERENCES sessions(id),
+        corners TEXT,
+        perspective_matrix TEXT,
+        inverse_matrix TEXT,
+        frame_width INTEGER,
+        frame_height INTEGER,
+        created_at DATETIME
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_trajectories_session_id ON trajectories(session_id)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_trajectories_shot_id ON trajectories(shot_id)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_ball_collisions_session_id ON ball_collisions(session_id)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_ball_collisions_shot_id ON ball_collisions(shot_id)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_physics_analysis_session_id ON physics_analysis(session_id)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_physics_analysis_shot_id ON physics_analysis(shot_id)
+    """,
 ]
 
 
@@ -226,6 +319,371 @@ def insert_event(
         ),
     )
     conn.commit()
+
+
+def insert_trajectory(
+    conn: sqlite3.Connection,
+    session_id: str,
+    shot_id: int,
+    ball_name: str,
+    track_id: int,
+    points: list[tuple[float, float, int, int]],
+    total_distance: float,
+    max_speed: float,
+) -> int:
+    """Insert a ball trajectory record.
+
+    Args:
+        conn: Database connection.
+        session_id: Session ID.
+        shot_id: Shot ID this trajectory belongs to.
+        ball_name: Name of the ball (e.g., "cue", "solid_1").
+        track_id: Tracker ID for this ball.
+        points: List of (x, y, timestamp_ms, frame_number) tuples.
+        total_distance: Total distance traveled in table units.
+        max_speed: Maximum speed during trajectory.
+
+    Returns:
+        ID of the inserted trajectory.
+    """
+    start_ts = points[0][2] if points else 0
+    end_ts = points[-1][2] if points else 0
+
+    cursor = conn.execute(
+        """
+        INSERT INTO trajectories (
+            session_id, shot_id, ball_name, track_id, points,
+            start_timestamp_ms, end_timestamp_ms, total_distance, max_speed, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            session_id,
+            shot_id,
+            ball_name,
+            track_id,
+            json.dumps(points),
+            start_ts,
+            end_ts,
+            total_distance,
+            max_speed,
+            datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def insert_collision(
+    conn: sqlite3.Connection,
+    session_id: str,
+    shot_id: int,
+    timestamp_ms: int,
+    frame_number: int,
+    ball1_name: str,
+    ball2_name: str,
+    ball1_track_id: int,
+    ball2_track_id: int,
+    position: tuple[float, float],
+    ball1_vel_before: tuple[float, float],
+    ball1_vel_after: tuple[float, float],
+    ball2_vel_before: tuple[float, float],
+    ball2_vel_after: tuple[float, float],
+    deflection_angle: float = 0.0,
+    energy_transferred: float = 0.0,
+) -> int:
+    """Insert a ball collision record.
+
+    Args:
+        conn: Database connection.
+        session_id: Session ID.
+        shot_id: Shot ID.
+        timestamp_ms: Collision timestamp.
+        frame_number: Frame number.
+        ball1_name: First ball name.
+        ball2_name: Second ball name.
+        ball1_track_id: First ball track ID.
+        ball2_track_id: Second ball track ID.
+        position: Collision position (x, y).
+        ball1_vel_before: Ball 1 velocity before (vx, vy).
+        ball1_vel_after: Ball 1 velocity after (vx, vy).
+        ball2_vel_before: Ball 2 velocity before (vx, vy).
+        ball2_vel_after: Ball 2 velocity after (vx, vy).
+        deflection_angle: Deflection angle in degrees.
+        energy_transferred: Energy transferred estimate.
+
+    Returns:
+        ID of the inserted collision.
+    """
+    cursor = conn.execute(
+        """
+        INSERT INTO ball_collisions (
+            session_id, shot_id, timestamp_ms, frame_number,
+            ball1_name, ball2_name, ball1_track_id, ball2_track_id,
+            position_x, position_y,
+            ball1_vx_before, ball1_vy_before, ball1_vx_after, ball1_vy_after,
+            ball2_vx_before, ball2_vy_before, ball2_vx_after, ball2_vy_after,
+            deflection_angle, energy_transferred, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            session_id,
+            shot_id,
+            timestamp_ms,
+            frame_number,
+            ball1_name,
+            ball2_name,
+            ball1_track_id,
+            ball2_track_id,
+            position[0],
+            position[1],
+            ball1_vel_before[0],
+            ball1_vel_before[1],
+            ball1_vel_after[0],
+            ball1_vel_after[1],
+            ball2_vel_before[0],
+            ball2_vel_before[1],
+            ball2_vel_after[0],
+            ball2_vel_after[1],
+            deflection_angle,
+            energy_transferred,
+            datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def insert_physics_analysis(
+    conn: sqlite3.Connection,
+    session_id: str,
+    shot_id: int,
+    analysis: dict,
+) -> int:
+    """Insert physics analysis for a shot.
+
+    Args:
+        conn: Database connection.
+        session_id: Session ID.
+        shot_id: Shot ID.
+        analysis: Analysis data dict with fields matching ShotAnalysis.
+
+    Returns:
+        ID of the inserted analysis.
+    """
+    cursor = conn.execute(
+        """
+        INSERT INTO physics_analysis (
+            session_id, shot_id, cue_initial_speed, cue_initial_speed_mph,
+            cue_initial_angle, cue_distance_traveled, cue_final_x, cue_final_y,
+            total_collisions, energy_efficiency, physics_valid,
+            validation_errors, simulation_match_score, position_errors,
+            analysis_json, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            session_id,
+            shot_id,
+            analysis.get("cue_initial_speed", 0),
+            analysis.get("cue_initial_speed_mph", 0),
+            analysis.get("cue_initial_angle", 0),
+            analysis.get("cue_distance_traveled", 0),
+            analysis.get("cue_final_position", (0, 0))[0],
+            analysis.get("cue_final_position", (0, 0))[1],
+            analysis.get("total_collisions", 0),
+            analysis.get("energy_efficiency", 0),
+            analysis.get("physics_valid", True),
+            json.dumps(analysis.get("validation_errors", [])),
+            analysis.get("simulation_match_score"),
+            json.dumps(analysis.get("position_errors", {})),
+            json.dumps(analysis),
+            datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def insert_calibration(
+    conn: sqlite3.Connection,
+    session_id: str,
+    corners: list[tuple[float, float]],
+    perspective_matrix: list | None,
+    inverse_matrix: list | None,
+    frame_width: int,
+    frame_height: int,
+) -> int:
+    """Insert calibration data for a session.
+
+    Args:
+        conn: Database connection.
+        session_id: Session ID.
+        corners: Four corner points in pixel coordinates.
+        perspective_matrix: 3x3 perspective transform matrix (as list).
+        inverse_matrix: 3x3 inverse transform matrix (as list).
+        frame_width: Video frame width.
+        frame_height: Video frame height.
+
+    Returns:
+        ID of the inserted calibration.
+    """
+    cursor = conn.execute(
+        """
+        INSERT INTO calibrations (
+            session_id, corners, perspective_matrix, inverse_matrix,
+            frame_width, frame_height, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            session_id,
+            json.dumps(corners),
+            json.dumps(perspective_matrix) if perspective_matrix else None,
+            json.dumps(inverse_matrix) if inverse_matrix else None,
+            frame_width,
+            frame_height,
+            datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def get_calibration(conn: sqlite3.Connection, session_id: str) -> dict | None:
+    """Get the latest calibration for a session.
+
+    Args:
+        conn: Database connection.
+        session_id: Session ID.
+
+    Returns:
+        Calibration dict or None if not found.
+    """
+    row = conn.execute(
+        """
+        SELECT * FROM calibrations
+        WHERE session_id = ?
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (session_id,),
+    ).fetchone()
+
+    if row:
+        return {
+            "id": row["id"],
+            "session_id": row["session_id"],
+            "corners": json.loads(row["corners"]) if row["corners"] else [],
+            "perspective_matrix": json.loads(row["perspective_matrix"]) if row["perspective_matrix"] else None,
+            "inverse_matrix": json.loads(row["inverse_matrix"]) if row["inverse_matrix"] else None,
+            "frame_width": row["frame_width"],
+            "frame_height": row["frame_height"],
+        }
+    return None
+
+
+def get_shot_trajectories(conn: sqlite3.Connection, shot_id: int) -> list[dict]:
+    """Get all trajectories for a shot.
+
+    Args:
+        conn: Database connection.
+        shot_id: Shot ID.
+
+    Returns:
+        List of trajectory dicts.
+    """
+    rows = conn.execute(
+        """
+        SELECT * FROM trajectories
+        WHERE shot_id = ?
+        ORDER BY ball_name
+        """,
+        (shot_id,),
+    ).fetchall()
+
+    return [
+        {
+            "id": row["id"],
+            "ball_name": row["ball_name"],
+            "track_id": row["track_id"],
+            "points": json.loads(row["points"]) if row["points"] else [],
+            "start_timestamp_ms": row["start_timestamp_ms"],
+            "end_timestamp_ms": row["end_timestamp_ms"],
+            "total_distance": row["total_distance"],
+            "max_speed": row["max_speed"],
+        }
+        for row in rows
+    ]
+
+
+def get_shot_collisions(conn: sqlite3.Connection, shot_id: int) -> list[dict]:
+    """Get all collisions for a shot.
+
+    Args:
+        conn: Database connection.
+        shot_id: Shot ID.
+
+    Returns:
+        List of collision dicts.
+    """
+    rows = conn.execute(
+        """
+        SELECT * FROM ball_collisions
+        WHERE shot_id = ?
+        ORDER BY timestamp_ms
+        """,
+        (shot_id,),
+    ).fetchall()
+
+    return [
+        {
+            "id": row["id"],
+            "timestamp_ms": row["timestamp_ms"],
+            "frame_number": row["frame_number"],
+            "ball1_name": row["ball1_name"],
+            "ball2_name": row["ball2_name"],
+            "position": (row["position_x"], row["position_y"]),
+            "deflection_angle": row["deflection_angle"],
+        }
+        for row in rows
+    ]
+
+
+def get_physics_analysis(conn: sqlite3.Connection, shot_id: int) -> dict | None:
+    """Get physics analysis for a shot.
+
+    Args:
+        conn: Database connection.
+        shot_id: Shot ID.
+
+    Returns:
+        Analysis dict or None if not found.
+    """
+    row = conn.execute(
+        """
+        SELECT * FROM physics_analysis
+        WHERE shot_id = ?
+        """,
+        (shot_id,),
+    ).fetchone()
+
+    if row:
+        return {
+            "id": row["id"],
+            "cue_initial_speed": row["cue_initial_speed"],
+            "cue_initial_speed_mph": row["cue_initial_speed_mph"],
+            "cue_initial_angle": row["cue_initial_angle"],
+            "cue_distance_traveled": row["cue_distance_traveled"],
+            "cue_final_position": (row["cue_final_x"], row["cue_final_y"]),
+            "total_collisions": row["total_collisions"],
+            "physics_valid": row["physics_valid"],
+            "validation_errors": json.loads(row["validation_errors"]) if row["validation_errors"] else [],
+            "simulation_match_score": row["simulation_match_score"],
+            "full_analysis": json.loads(row["analysis_json"]) if row["analysis_json"] else {},
+        }
+    return None
 
 
 def _apply_pragmas(conn: sqlite3.Connection) -> None:
