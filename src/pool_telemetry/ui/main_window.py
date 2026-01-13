@@ -335,17 +335,27 @@ class MainWindow(QtWidgets.QMainWindow):
             self._update_video_label(self._last_frame)
 
     def _on_connect_gopro(self) -> None:
-        dialog = GoProConnectDialog(self)
+        dialog = GoProConnectDialog(self._config.gopro, self)
         if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return
-        device_index, resolution, framerate = dialog.values()
-        self._current_source_type = "gopro_live"
-        self._current_source_path = f"device:{device_index}"
+        source, resolution, framerate, stabilization = dialog.values()
+        connection_mode = dialog.connection_mode()
+        wifi_ip = dialog.wifi_ip()
+
+        # Determine source type and path for session tracking
+        if connection_mode == "wifi":
+            self._current_source_type = "gopro_wifi"
+            self._current_source_path = wifi_ip or str(source)
+        else:
+            self._current_source_type = "gopro_usb"
+            self._current_source_path = f"device:{source}" if isinstance(source, int) else str(source)
+
         settings = VideoSettings(
             resolution=parse_resolution(resolution),
             framerate=framerate,
+            stabilization=stabilization,
         )
-        self._start_video_source(device_index, settings, playback_real_time=False)
+        self._start_video_source(source, settings, playback_real_time=False)
 
     def _on_import_video(self) -> None:
         formats = self._config.video_import.supported_formats
